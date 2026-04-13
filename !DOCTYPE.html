@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>Tetris: Extreme Skill Master</title>
+<style>
+    body { background:#0a0a0a; color:#fff; font-family:sans-serif; display:flex; justify-content:center; align-items:center; height:100vh; margin:0; overflow: hidden; }
+    #game { display:flex; gap: 25px; }
+    canvas { background:#000; border: 3px solid #333; box-shadow: 0 0 30px rgba(0,0,0,0.8); }
+    #ui { width: 190px; display: flex; flex-direction: column; gap: 12px; }
+    .box { padding:15px; background: #1a1a1a; border-radius: 10px; border: 1px solid #333; box-shadow: inset 0 0 10px rgba(0,0,0,0.5); }
+    .label { font-size: 11px; color: #777; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 1.5px; }
+    .value { font-size: 20px; font-weight: bold; color: #eee; }
+    #skills { font-size: 14px; color: #ffca28; line-height: 1.6; font-weight: bold; }
+    button { padding:15px; cursor:pointer; background: #facc15; color: #000; border: none; border-radius: 6px; font-weight: bold; font-size: 16px; transition: 0.2s; }
+    button:hover { background: #eab308; transform: scale(1.05); }
+    #overlay {
+        position:absolute; top:0; left:0; width:300px; height:600px;
+        background:rgba(0,0,0,0.9);
+        display:flex; flex-direction:column; justify-content:center; align-items:center; text-align: center; z-index: 10;
+    }
+    .hot { color: #ff4444; text-shadow: 0 0 10px #ff0000; }
+</style>
+</head>
+<body>
+<div id="game">
+    <div style="position:relative">
+        <canvas id="board" width="300" height="600"></canvas>
+        <div id="overlay">
+            <h1 style="color: #facc15; margin-bottom: 5px; letter-spacing: 2px;">TETRIS</h1>
+            <p style="font-size: 13px; color: #888; margin-bottom: 25px;">EXTREME SKILL MODE</p>
+            <button onclick="startGame()">START GAME</button>
+            <div style="font-size:12px; line-height: 1.8; margin-top: 25px; color: #bbb; text-align: left; padding: 0 20px;">
+                <b style="color:#eee;">[SKILLS]</b><br>
+                🧨 <b style="color:#fff;">,</b> Mine (Push Down)<br>
+                ☄️ <b style="color:#fff;">.</b> Meteor (Circle Blast)<br>
+                💣 <b style="color:#fff;">/</b> Bomb (50% Chaos)
+            </div>
+        </div>
+    </div>
+    <div id="ui">
+        <div class="box"><div class="label">Next Piece</div><div id="next" class="value">-</div></div>
+        <div class="box"><div class="label">Hold</div><div id="hold" class="value">-</div></div>
+        <div class="box"><div class="label">Difficulty</div><div id="level" class="value">1</div></div>
+        <div class="box"><div class="label">Score</div><div id="score" class="value">0</div></div>
+        <div class="box"><div class="label">Stored Skills</div><div id="skills">None</div></div>
+    </div>
+</div>
+
+<script>
+const COLS=10, ROWS=20, SIZE=30;
+const canvas=document.getElementById('board');
+const ctx=canvas.getContext('2d');
+
+const SHAPES={
+    I:[[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+    O:[[1,1],[1,1]],
+    T:[[0,1,0],[1,1,1],[0,0,0]],
+    S:[[0,1,1],[1,1,0],[0,0,0]],
+    Z:[[1,1,0],[0,1,1],[0,0,0]],
+    J:[[1,0,0],[1,1,1],[0,0,0]],
+    L:[[0,0,1],[1,1,1],[0,0,0]]
+};
+
+const COLORS={
+    I:'#00f0f0', O:'#f0f000', T:'#a000f0',
+    S:'#00f000', Z:'#f00000', J:'#0000f0', L:'#f0a000'
+};
+
+let board=[], queue=[], bag=[];
+let current=null, pos=null;
+let hold=null, holdUsed=false;
+let skills=[], score=0, level=1;
+let running=false;
+let dropCounter = 0;
+let dropInterval = 1000;
+let currentTime = 0;
+let blockIdCounter = 0;
+let effects = [];
+
+function startGame(){
+    document.getElementById('overlay').style.display='none';
+    init();
+    running=true;
+    requestAnimationFrame(loop);
+}
+
+function init(){
+    board=Array.from({length:ROWS},()=>Array(COLS).fill(0));
+    queue=[]; bag=[]; hold=null; skills=[]; holdUsed=false; effects=[];
+    score=0; level=1; dropInterval=1000; blockIdCounter=0;
+    spawn();
+}
+
+function shuffle(a){ return a.sort(()=>Math.random()-0.5); }
+function newBag(){ return shuffle(['I','O','T','S','Z','J','L']); }
+function refill(){ while(queue.length<5){ if(!bag.length) bag=newBag(); queue.push(bag.pop()); } }
+
+function spawn(type = null){
+    refill();
+    const newType = type || queue.shift();
+    // 난이도 상승에 따른 특수 블록 확률 증가 (최대 25%)
+    const specialProb = Math.min(0.25, 0.1 + (level * 0.015));
+    const special = Math.random() < specialProb;
+    
+    current = { 
+        type: newType, 
+        shape: SHAPES[newType], 
+        special: special,
+        id: ++blockIdCounter 
+    };
+    
+    pos = { x: Math.floor(COLS/2) - Math.floor(current.shape[0].length/2), y: 0 };
+    if(collide(pos.x, pos.y, current.shape)) gameOver();
+    updateUI();
+}
+
+function gameOver(){
+    running=false;
+    const o=document.getElementById('overlay');
+    o.style.display='flex';
+    o.innerHTML=`<h2 style="color:#ff4444">MISSION FAILED</h2><p>Score: ${score} | Level: ${level}</p><button onclick="location.reload()">RETRY</button>`;
+}
+
+function collide(nx, ny, shape){
+    return shape.some((r, y) => r.some((v, x) => {
+        if(!v) return false;
+        let px = nx + x, py = ny + y;
+        return px < 0 || px >= COLS || py >= ROWS || (py >= 0 && board[py][px]);
+    }));
+}
+
+function getGhostPos() {
+    let ghostY = pos.y;
+    while(!collide(pos.x, ghostY + 1, current.shape)) ghostY++;
+    return ghostY;
+}
+
+function merge(){
+    current.shape.forEach((r, y) => r.forEach((v, x) => {
+        if(v) {
+            board[pos.y + y][pos.x + x] = { 
+                color: current.special ? 'SPECIAL' : COLORS[current.type],
+                baseColor: COLORS[current.type],
+                isSpecial: current.special,
+                id: current.id
+            };
+        }
+    }));
+}
+
+function clearLines(){
+    let linesInThisTurn = 0;
+    let triggeredSpecials = new Set();
+
+    for (let y = ROWS - 1; y >= 0; y--) {
+        if (board[y].every(v => v !== 0)) {
+            board[y].forEach(v => { if (v.isSpecial) triggeredSpecials.add(v.id); });
+            board.splice(y, 1);
+            board.unshift(Array(COLS).fill(0));
+            linesInThisTurn++;
+            y++;
+        }
+    }
+
+    if (linesInThisTurn > 0) {
+        score += [0, 100, 300, 500, 800][linesInThisTurn] * level;
+        
+        // 🔥 난이도 핵심: 500점당 레벨업 + 지수적 속도 증가
+        let newLevel = Math.floor(score / 500) + 1;
+        if (newLevel > level) {
+            level = newLevel;
+            // 복리(15%)로 속도 감소 -> 레벨 10부턴 극한
+            dropInterval = Math.max(80, 1000 * Math.pow(0.85, level - 1));
+        }
+        
+        // 스킬 지급 및 특수 상태 해제
+        triggeredSpecials.forEach(id => {
+            giveSkill();
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    let cell = board[r][c];
+                    if (cell && cell.id === id) {
+                        cell.isSpecial = false;
+                        cell.color = cell.baseColor;
+                    }
+                }
+            }
+        });
+    }
+}
+
+function giveSkill(){
+    const s = ['mine','meteor','bomb'][Math.floor(Math.random()*3)];
+    if(skills.length < 5) skills.push(s);
+    updateUI();
+}
+
+function useSkill(type) {
+    const idx = skills.indexOf(type);
+    if (idx === -1) return;
+    skills.splice(idx, 1);
+
+    if (type === 'bomb') { 
+        let leftSide = Math.random() < 0.5;
+        effects.push({ type: 'bomb', left: leftSide, start: currentTime, duration: 800 });
+        for(let y = 0; y < ROWS; y++) {
+            for(let x = 0; x < COLS; x++) {
+                if (leftSide && x < 5) board[y][x] = 0;
+                else if (!leftSide && x >= 5) board[y][x] = 0;
+            }
+        }
+    } 
+    else if (type === 'mine') { 
+        board.pop();
+        board.unshift(Array(COLS).fill(0));
+        effects.push({ type: 'mine', start: currentTime, duration: 400 });
+    } 
+    else if (type === 'meteor') { 
+        let targetX = Math.floor(Math.random() * COLS);
+        let targetY = 0;
+        while(targetY < ROWS - 1 && board[targetY + 1][targetX] === 0) targetY++;
+
+        effects.push({ type: 'meteor', x: targetX, y: targetY, start: currentTime, duration: 600 });
+        for(let dy = -2; dy <= 2; dy++){
+            for(let dx = -2; dx <= 2; dx++){
+                if (Math.abs(dy) === 2 && Math.abs(dx) === 2) continue; 
+                let ny = targetY + dy; let nx = targetX + dx;
+                if (ny >= 0 && ny < ROWS && nx >= 0 && nx < COLS) board[ny][nx] = 0;
+            }
+        }
+    }
+    updateUI();
+}
+
+function drop(){
+    if(!collide(pos.x, pos.y + 1, current.shape)) {
+        pos.y++;
+    } else {
+        merge();
+        clearLines();
+        spawn();
+        holdUsed = false;
+    }
+    dropCounter = 0;
+}
+
+function hardDrop(){
+    while(!collide(pos.x, pos.y + 1, current.shape)) pos.y++;
+    drop();
+}
+
+function draw(time){
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const pulse = Math.sin(time / 150) * 0.5 + 0.5;
+
+    board.forEach((r, y) => r.forEach((v, x) => {
+        if(v) {
+            if(v.color === 'SPECIAL') {
+                ctx.fillStyle = `rgb(255, ${160 + pulse * 95}, ${40 + pulse * 60})`;
+                ctx.shadowBlur = 12 * pulse; ctx.shadowColor = "#ffaa00";
+            } else {
+                ctx.fillStyle = v.color; ctx.shadowBlur = 0;
+            }
+            ctx.fillRect(x * SIZE, y * SIZE, SIZE - 1, SIZE - 1);
+            ctx.shadowBlur = 0;
+        }
+    }));
+
+    if(current) {
+        const ghostY = getGhostPos();
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+        current.shape.forEach((r, y) => r.forEach((v, x) => {
+            if(v) ctx.strokeRect((pos.x + x) * SIZE + 2, (ghostY + y) * SIZE + 2, SIZE - 5, SIZE - 5);
+        }));
+
+        if(current.special) {
+            ctx.fillStyle = `rgb(255, ${190 + pulse * 65}, 0)`;
+            ctx.shadowBlur = 15 * pulse; ctx.shadowColor = "#ffca28";
+        } else {
+            ctx.fillStyle = COLORS[current.type];
+        }
+        current.shape.forEach((r, y) => r.forEach((v, x) => {
+            if(v) ctx.fillRect((pos.x + x) * SIZE, (pos.y + y) * SIZE, SIZE - 1, SIZE - 1);
+        }));
+        ctx.shadowBlur = 0;
+    }
+    drawEffects();
+}
+
+function drawEffects() {
+    effects = effects.filter(eff => currentTime - eff.start <= eff.duration);
+    effects.forEach(eff => {
+        let progress = (currentTime - eff.start) / eff.duration;
+        let alpha = 1 - progress;
+        ctx.save();
+        if (eff.type === 'bomb') {
+            ctx.fillStyle = `rgba(255, 30, 0, ${alpha * 0.6})`;
+            if (eff.left) ctx.fillRect(0, 0, 150, 600); else ctx.fillRect(150, 0, 150, 600);
+        } else if (eff.type === 'mine') {
+            ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.4})`;
+            ctx.fillRect(0, 0, 300, 600);
+        } else if (eff.type === 'meteor') {
+            let cx = eff.x * SIZE + 15, cy = eff.y * SIZE + 15;
+            let grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, progress * 120);
+            grad.addColorStop(0, `rgba(255, 255, 150, ${alpha})`);
+            grad.addColorStop(1, `rgba(255, 50, 0, 0)`);
+            ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(cx, cy, progress * 120, 0, Math.PI*2); ctx.fill();
+        }
+        ctx.restore();
+    });
+}
+
+function updateUI(){
+    const skillIcons = { 'mine':'🧨 MINE', 'meteor':'☄️ METEOR', 'bomb':'💣 BOMB' };
+    document.getElementById('skills').innerHTML = skills.length 
+        ? skills.map(s => `<div style="margin-bottom:4px;">${skillIcons[s]}</div>`).join('') 
+        : '<span style="color:#444">EMPTY</span>';
+    document.getElementById('level').className = level > 10 ? 'value hot' : 'value';
+    document.getElementById('hold').innerText = hold || '-';
+    document.getElementById('next').innerText = queue[0] || '-';
+    document.getElementById('score').innerText = score.toLocaleString();
+    document.getElementById('level').innerText = level;
+}
+
+window.addEventListener('keydown', e => {
+    if(!running || !current) return;
+    if(e.key === 'ArrowLeft' && !collide(pos.x - 1, pos.y, current.shape)) pos.x--;
+    if(e.key === 'ArrowRight' && !collide(pos.x + 1, pos.y, current.shape)) pos.x++;
+    if(e.key === 'ArrowDown') drop();
+    if(e.key === 'ArrowUp'){
+        let m = current.shape;
+        let res = m[0].map((_, i) => m.map(row => row[i]).reverse());
+        if(!collide(pos.x, pos.y, res)) current.shape = res;
+    }
+    if(e.key === ' ') { e.preventDefault(); hardDrop(); }
+    if(e.key === 'Shift') {
+        if(holdUsed) return;
+        const temp = hold; hold = current.type;
+        if(temp) spawn(temp); else spawn();
+        holdUsed = true;
+    }
+    if(e.key === ',') useSkill('mine');
+    if(e.key === '.') useSkill('meteor');
+    if(e.key === '/') useSkill('bomb');
+});
+
+let lastTime = 0;
+function loop(time = 0){
+    if(!running) return;
+    const deltaTime = time - lastTime;
+    lastTime = time;
+    currentTime = time;
+    dropCounter += deltaTime;
+    if(dropCounter > dropInterval) drop();
+    draw(time);
+    requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
